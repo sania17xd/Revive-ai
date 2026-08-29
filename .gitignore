@@ -17,3 +17,7 @@ __pycache__/
 .vscode/
 .DS_Store
 Thumbs.db
+
+uvicorn.err.log
+uvicorn.out.log
+*.log

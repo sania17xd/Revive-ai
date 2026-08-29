@@ -1,4 +1,4 @@
-# AI Revenue Recovery Agent
+# Revive AI — Revenue Recovery Agent
 
 Detects at-risk revenue (failed payments, abandoned checkouts, failed
 subscriptions), diagnoses the root cause with an LLM (Groq), decides a bounded
