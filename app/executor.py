@@ -21,6 +21,10 @@ def execute_action(db, case, action: str, reason: str):
         case.status = "escalated"
         _log(db, case, "escalated", "Handed off to human review queue per policy.")
 
+    elif action == "wait_for_cooldown":
+        case.status = "action_taken"
+        _log(db, case, "cooldown_wait", "No customer action taken; waiting for policy cooldown to expire.")
+
     elif action == "stop_and_log":
         case.status = "stopped"
         _log(db, case, "stopped", "Recovery attempts stopped per policy stopping rule. No further action.")

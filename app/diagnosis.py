@@ -40,6 +40,14 @@ VALID_ROOT_CAUSES = [
     "unknown",
 ]
 
+FAILURE_CODE_ROOT_CAUSES = {
+    "INSUFFICIENT_FUNDS": "insufficient_funds",
+    "BANK_DECLINE": "bank_decline",
+    "TIMEOUT": "network_timeout",
+    "CARD_EXPIRED": "card_expired",
+    "RISK_BLOCKED": "risk_block",
+}
+
 DIAGNOSIS_SYSTEM_PROMPT = f"""You are a payment-failure diagnosis assistant for an
 e-commerce revenue recovery system. Given details about a failed payment or
 abandoned checkout, classify the root cause into EXACTLY ONE of these categories:
@@ -51,20 +59,34 @@ Respond with ONLY a JSON object, no other text, no markdown fences:
 """
 
 
+def _fallback_diagnosis(case, reason: str) -> dict:
+    """Deterministic classifier used when the LLM is unavailable."""
+    if case.event_type == "checkout.abandoned":
+        root_cause = "user_abandoned"
+    else:
+        root_cause = FAILURE_CODE_ROOT_CAUSES.get(case.failure_code or "", "unknown")
+
+    confidence = 0.9 if root_cause != "unknown" else 0.35
+    return {
+        "root_cause": root_cause,
+        "confidence": confidence,
+        "reasoning": (
+            f"{reason} Used deterministic fallback from event_type="
+            f"{case.event_type} and failure_code={case.failure_code or 'none'}."
+        ),
+    }
+
+
 def diagnose_case(case) -> dict:
     """
     Takes a Case object, returns {"root_cause": str, "confidence": float, "reasoning": str}.
-    Falls back to "unknown" with confidence 0.0 if the API call fails, the
-    key isn't set, or the response can't be parsed -- we never want a
-    broken API call to silently crash the whole pipeline.
+    Falls back to a deterministic classifier if the key isn't set, the API
+    call fails, or the response can't be parsed -- we never want a broken API
+    call to silently crash the whole pipeline.
     """
     api_key = _get_api_key()
     if api_key is None:
-        return {
-            "root_cause": "unknown",
-            "confidence": 0.0,
-            "reasoning": "GROQ_API_KEY not set in .env -- add your free key from console.groq.com.",
-        }
+        return _fallback_diagnosis(case, "GROQ_API_KEY not set.")
 
     event_summary = f"""
 Event type: {case.event_type}
@@ -116,14 +138,6 @@ Previous retry attempts on this case: {case.retry_count}
             server_message = e.response.json().get("error", {}).get("message", e.response.text)
         except Exception:
             server_message = e.response.text if e.response is not None else str(e)
-        return {
-            "root_cause": "unknown",
-            "confidence": 0.0,
-            "reasoning": f"Diagnosis failed, defaulting to manual review. Groq error: {server_message}",
-        }
+        return _fallback_diagnosis(case, f"Groq diagnosis failed: {server_message}")
     except Exception as e:
-        return {
-            "root_cause": "unknown",
-            "confidence": 0.0,
-            "reasoning": f"Diagnosis failed, defaulting to manual review. Error: {e}",
-        }
+        return _fallback_diagnosis(case, f"Diagnosis failed: {e}")

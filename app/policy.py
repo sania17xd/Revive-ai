@@ -10,6 +10,8 @@ Each root cause maps to:
   - escalate_after: what to do once max_retries is hit (never "retry forever")
 """
 
+import datetime
+
 POLICY_TABLE = {
     "insufficient_funds": {
         "actions": ["wait_and_retry", "send_reminder"],
@@ -56,7 +58,7 @@ POLICY_TABLE = {
 }
 
 
-def decide_action(case) -> dict:
+def decide_action(case, last_action_at=None, now=None) -> dict:
     """
     Given a Case (already diagnosed), decide what to do next.
     Returns {"action": str, "reason": str} -- always something explainable.
@@ -64,6 +66,18 @@ def decide_action(case) -> dict:
     path should trigger a recovery action.
     """
     policy = POLICY_TABLE.get(case.root_cause, POLICY_TABLE["unknown"])
+    now = now or datetime.datetime.utcnow()
+
+    if last_action_at and policy["cooldown_hours"] > 0:
+        cooldown_until = last_action_at + datetime.timedelta(hours=policy["cooldown_hours"])
+        if now < cooldown_until:
+            return {
+                "action": "wait_for_cooldown",
+                "reason": (
+                    f"Cooldown still active for root cause '{case.root_cause}'. "
+                    f"Next automated action allowed at {cooldown_until.isoformat()} UTC."
+                ),
+            }
 
     if case.retry_count >= policy["max_retries"]:
         return {

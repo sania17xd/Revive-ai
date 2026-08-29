@@ -48,7 +48,9 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Edit `.env` and add your **Groq API key** at minimum:
+The app runs without external credentials by using deterministic fallback
+diagnosis from gateway failure codes. For the LLM diagnosis path, edit `.env`
+and add your **Groq API key**:
 ```
 GROQ_API_KEY=gsk_...
 ```
@@ -57,8 +59,9 @@ Get one free, no card required, at https://console.groq.com
 30 requests/min, 14,400 requests/day on Llama 3.3 70B -- comfortably
 enough for a hackathon batch.
 
-Razorpay keys are optional for now — everything runs on synthetic data
-without them. See step 4 below for when you're ready to add them.
+Groq and Razorpay keys are optional for the first demo pass — everything runs
+on synthetic data without them. See step 4 below for when you're ready to add
+Razorpay test mode.
 
 ## 2. Run it
 
@@ -143,16 +146,6 @@ Steps to reproduce the full pipeline on a clean batch, from an empty database:
    recovered, recovery rate, and a breakdown by root cause.
 
 ## Known limitations
-
-- Retry/nudge *success* is simulated with a weighted random roll
-  (`executor.py::_simulate_retry_outcome`), not a real payment webhook,
-  since a hackathon can't wait days for real customers to retry. Swap this
-  for real `payment.captured` webhook handling for production use.
-- Notifications (reminders, nudges) are logged, not actually sent. Wiring
-  real SMS/email/WhatsApp is a couple hours of work with any provider's
-  API but wasn't the point of this build.
-- The root-cause taxonomy is fixed and small (7 categories) on purpose —
-  it's what keeps the policy engine's decisions bounded and explainable.
 
 - Retry/nudge *success* is simulated with a weighted random roll
   (`executor.py::_simulate_retry_outcome`), not a real payment webhook,

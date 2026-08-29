@@ -126,7 +126,13 @@ def process_pending_cases(limit: int = 20, db: Session = Depends(get_db)):
              f"reasoning: {diagnosis['reasoning']}")
         db.commit()
 
-        decision = decide_action(case)
+        last_action = (
+            db.query(AuditLog)
+            .filter(AuditLog.case_id == case.id, AuditLog.step == "action_executed")
+            .order_by(desc(AuditLog.timestamp))
+            .first()
+        )
+        decision = decide_action(case, last_action_at=last_action.timestamp if last_action else None)
         execute_action(db, case, decision["action"], decision["reason"])
         processed += 1
 
