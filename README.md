@@ -22,7 +22,7 @@ you can build and demo the whole loop before Razorpay is even connected.
 - **Failure recovery** — `policy.py`'s `escalate_after` logic is the
   answer to "what broke and what did you do about it": once a case hits
   its retry cap, it stops automatically and escalates instead of retrying
-  forever. Show this live in your demo (see "Demo script" below).
+  forever. See the demo walkthrough below.
 
 ## Project structure
 
@@ -124,25 +124,35 @@ You do **not** need Razorpay set up to build, test, or demo the diagnosis,
 policy, stopping-rules, and metrics parts of this project — that's the
 whole point of the synthetic data generator.
 
-## 5. Demo script (for judges)
+## 5. Demo walkthrough
 
-1. Show the dashboard empty, click **Seed 100**.
-2. Click **Run pipeline pass** once — point out cases moving from
-   `detected` -> `diagnosed` -> action taken, and read out one case's
-   `root_cause` + `diagnosis_reasoning` live.
-3. Click **Run pipeline pass** 2-3 more times — watch some cases move to
-   `recovered`, and watch at least one case's retry count hit its cap and
-   flip to `escalated` or `stopped`. **This is your "one failure handled
-   gracefully" moment** — open that case's `/cases/{id}/audit` and walk
-   through the log line by line: detected -> diagnosed -> decided
-   (attempt 1) -> outcome (failed) -> decided (attempt 2) -> outcome
-   (failed) -> "retry cap reached, escalating" -> escalated. Nothing
-   retried forever, nothing acted without a logged reason.
-4. Show `/metrics` — total at risk, total recovered, recovery rate,
-   breakdown by root cause. These are the honest, measured numbers the
-   bar asks for.
+Steps to reproduce the full pipeline on a clean batch, from an empty database:
 
-## Known limitations (say these out loud, don't hide them)
+1. Seed a batch: `POST /seed?count=100` (or click **Seed 100 synthetic cases** on the dashboard).
+2. Run the pipeline: `POST /process` (or click **Run pipeline pass**). This
+   processes cases in batches of 20 with a short delay between diagnosis
+   calls, so a full batch of 100 needs several passes to fully clear.
+3. Inspect an individual case's reasoning and outcome via
+   `GET /cases/{id}/audit` — this shows the full chain: detected ->
+   diagnosed (root cause, confidence, reasoning) -> decided (which policy
+   rule fired and why) -> action executed -> outcome.
+4. Look specifically for a case that hit its retry cap and escalated
+   instead of retrying indefinitely — this demonstrates the stopping-rule
+   behavior described above.
+5. Check `GET /metrics` for the batch-level numbers: total at risk, total
+   recovered, recovery rate, and a breakdown by root cause.
+
+## Known limitations
+
+- Retry/nudge *success* is simulated with a weighted random roll
+  (`executor.py::_simulate_retry_outcome`), not a real payment webhook,
+  since a hackathon can't wait days for real customers to retry. Swap this
+  for real `payment.captured` webhook handling for production use.
+- Notifications (reminders, nudges) are logged, not actually sent. Wiring
+  real SMS/email/WhatsApp is a couple hours of work with any provider's
+  API but wasn't the point of this build.
+- The root-cause taxonomy is fixed and small (7 categories) on purpose —
+  it's what keeps the policy engine's decisions bounded and explainable.
 
 - Retry/nudge *success* is simulated with a weighted random roll
   (`executor.py::_simulate_retry_outcome`), not a real payment webhook,
