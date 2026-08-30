@@ -1,6 +1,6 @@
 """
 Run with:  uvicorn app.main:app --reload
-Then open: J   (interactive API playground)
+Then open: http://localhost:8000/docs   (interactive API playground)
            http://localhost:8000/dashboard
 
 Suggested first run (no Razorpay needed):
@@ -104,9 +104,11 @@ def process_pending_cases(limit: int = 20, db: Session = Depends(get_db)):
     work through a big batch in manageable chunks, or raise the limit
     once you're on a paid tier.
     """
+    pending_statuses = ["detected", "diagnosed", "action_taken"]
     pending = (
         db.query(Case)
-        .filter(Case.status.in_(["detected", "action_taken"]))
+        .filter(Case.status.in_(pending_statuses))
+        .order_by(desc(Case.created_at), desc(Case.id))
         .limit(limit)
         .all()
     )
@@ -136,7 +138,12 @@ def process_pending_cases(limit: int = 20, db: Session = Depends(get_db)):
         execute_action(db, case, decision["action"], decision["reason"])
         processed += 1
 
-    return {"processed": processed, "remaining_pending": len(pending) - processed if processed < limit else "unknown"}
+    remaining_pending = (
+        db.query(Case)
+        .filter(Case.status.in_(pending_statuses))
+        .count()
+    )
+    return {"processed": processed, "remaining_pending": remaining_pending}
 
 
 # ---------------------------------------------------------------------------
@@ -148,12 +155,13 @@ def list_cases(status: str | None = None, limit: int = 100, db: Session = Depend
     q = db.query(Case)
     if status:
         q = q.filter(Case.status == status)
-    cases = q.order_by(desc(Case.created_at)).limit(limit).all()
+    cases = q.order_by(desc(Case.created_at), desc(Case.id)).limit(limit).all()
     return [
         {
             "id": c.id, "event_type": c.event_type, "status": c.status,
             "amount": c.amount, "root_cause": c.root_cause,
-            "retry_count": c.retry_count, "recovered_amount": c.recovered_amount,
+            "last_action": c.last_action, "retry_count": c.retry_count,
+            "recovered_amount": c.recovered_amount,
         }
         for c in cases
     ]
@@ -171,6 +179,7 @@ def get_case(case_id: int, db: Session = Depends(get_db)):
         "status": case.status, "root_cause": case.root_cause,
         "diagnosis_confidence": case.diagnosis_confidence,
         "diagnosis_reasoning": case.diagnosis_reasoning,
+        "last_action": case.last_action,
         "retry_count": case.retry_count, "recovered_amount": case.recovered_amount,
     }
 
@@ -207,6 +216,7 @@ DASHBOARD_HTML = """
 <!DOCTYPE html>
 <html>
 <head>
+<meta charset="utf-8">
 <title>Revenue Recovery Dashboard</title>
 <style>
   body { font-family: -apple-system, sans-serif; max-width: 1000px; margin: 40px auto; padding: 0 20px; background:#fafafa; }
@@ -228,6 +238,7 @@ DASHBOARD_HTML = """
   .escalated { background: #fef3c7; color: #92400e; }
   .stopped { background: #f3f4f6; color: #6b7280; }
   .detected, .diagnosed, .action_taken { background: #dbeafe; color: #1e40af; }
+  .money-recovered { color: #166534; font-weight: 600; }
 </style>
 </head>
 <body>
@@ -240,7 +251,7 @@ DASHBOARD_HTML = """
   <div id="status"></div>
   <div class="metrics" id="metrics"></div>
   <table id="cases-table">
-    <thead><tr><th>ID</th><th>Type</th><th>Root Cause</th><th>Amount</th><th>Status</th><th>Retries</th><th>Audit</th></tr></thead>
+    <thead><tr><th>ID</th><th>Type</th><th>Root Cause</th><th>Amount</th><th>Status</th><th>Action Taken</th><th>Recovered</th><th>Retries</th><th>Audit</th></tr></thead>
     <tbody></tbody>
   </table>
 
@@ -257,6 +268,14 @@ refreshButton.addEventListener('click', refresh);
 function setStatus(message = '', type = '') {
   statusEl.textContent = message;
   statusEl.className = type;
+}
+
+function formatLabel(value, fallback = '-') {
+  return value ? value.replace(/_/g, ' ') : fallback;
+}
+
+function formatMoney(value) {
+  return `₹${Number(value || 0).toLocaleString()}`;
 }
 
 async function seedData() {
@@ -306,8 +325,10 @@ async function refresh() {
     const cases = await (await fetch('/cases?limit=50')).json();
     document.querySelector('#cases-table tbody').innerHTML = cases.map(c => `
     <tr>
-      <td>${c.id}</td><td>${c.event_type}</td><td>${c.root_cause || '-'}</td>
-      <td>₹${c.amount}</td><td><span class="status ${c.status}">${c.status}</span></td>
+      <td>${c.id}</td><td>${formatLabel(c.event_type)}</td><td>${formatLabel(c.root_cause, 'Not diagnosed yet')}</td>
+      <td>${formatMoney(c.amount)}</td><td><span class="status ${c.status}">${formatLabel(c.status)}</span></td>
+      <td>${formatLabel(c.last_action, 'No action yet')}</td>
+      <td class="${c.recovered_amount > 0 ? 'money-recovered' : ''}">${formatMoney(c.recovered_amount)}</td>
       <td>${c.retry_count}</td>
       <td><a href="/cases/${c.id}/audit" target="_blank">view</a></td>
     </tr>

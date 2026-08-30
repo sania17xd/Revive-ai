@@ -15,6 +15,7 @@ from app.razorpay_client import create_payment_link, is_razorpay_configured
 def execute_action(db, case, action: str, reason: str):
     """Runs `action` against `case`, updates case state, writes audit rows."""
 
+    case.last_action = action
     _log(db, case, "decided", reason)
 
     if action == "escalate_to_human":
@@ -36,10 +37,11 @@ def execute_action(db, case, action: str, reason: str):
         _apply_outcome(db, case, outcome)
 
     elif action == "send_reminder":
+        case.status = "action_taken"
         _log(db, case, "action_executed", f"Reminder message sent to customer {case.customer_id} (simulated).")
-        case.last_action = "send_reminder"
 
     elif action == "suggest_alternate_method":
+        case.status = "action_taken"
         if is_razorpay_configured():
             link = create_payment_link(case)
             _log(db, case, "action_executed", f"New payment link created suggesting alternate method: {link}")
@@ -47,12 +49,11 @@ def execute_action(db, case, action: str, reason: str):
             _log(db, case, "action_executed",
                  "Simulated: new payment link suggesting an alternate payment method sent to customer. "
                  "(Set RAZORPAY_KEY_ID/SECRET to create a real test-mode payment link here.)")
-        case.last_action = "suggest_alternate_method"
 
     elif action == "send_update_payment_method_link":
+        case.status = "action_taken"
         _log(db, case, "action_executed",
              f"Simulated: 'update your card' link sent to customer {case.customer_id}.")
-        case.last_action = "send_update_payment_method_link"
 
     elif action in ("send_nudge", "send_nudge_with_incentive"):
         case.retry_count += 1
