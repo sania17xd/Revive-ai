@@ -1,4 +1,4 @@
-# Secrets -- never commit your real API keys
+# Secrets 
 .env
 
 # Local database
