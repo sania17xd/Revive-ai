@@ -46,6 +46,10 @@ FAILURE_CODE_ROOT_CAUSES = {
     "TIMEOUT": "network_timeout",
     "CARD_EXPIRED": "card_expired",
     "RISK_BLOCKED": "risk_block",
+    "PAYMENT_FAILED": "bank_decline",
+    "AUTHENTICATION_FAILED": "bank_decline",
+    "TRANSACTION_TIMED_OUT": "network_timeout",
+    "INTERNATIONAL_TRANSACTION_NOT_ALLOWED": "risk_block",
 }
 
 DIAGNOSIS_SYSTEM_PROMPT = f"""You are a payment-failure diagnosis assistant for an
@@ -64,7 +68,8 @@ def _fallback_diagnosis(case, reason: str) -> dict:
     if case.event_type == "checkout.abandoned":
         root_cause = "user_abandoned"
     else:
-        root_cause = FAILURE_CODE_ROOT_CAUSES.get(case.failure_code or "", "unknown")
+        normalized_failure_code = (case.failure_code or "").upper()
+        root_cause = FAILURE_CODE_ROOT_CAUSES.get(normalized_failure_code, "unknown")
 
     confidence = 0.9 if root_cause != "unknown" else 0.35
     return {

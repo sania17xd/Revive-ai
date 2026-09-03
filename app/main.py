@@ -28,14 +28,14 @@ from app.metrics import compute_metrics
 
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="AI Revenue Recovery Agent")
+app = FastAPI(title="Revive AI — Revenue Recovery Agent")
 
 RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET", "")
 
 
 # ---------------------------------------------------------------------------
 # 1. INGESTION -- synthetic data OR real Razorpay webhooks
-# ---------------------------------------------------------------------------
+
 
 @app.post("/seed")
 def seed(count: int = 100, db: Session = Depends(get_db)):
@@ -75,7 +75,7 @@ async def razorpay_webhook(request: Request, db: Session = Depends(get_db)):
         amount=(entity.get("amount", 0) or 0) / 100,
         currency=entity.get("currency", "INR"),
         payment_method=entity.get("method"),
-        failure_code=entity.get("error_code"),
+        failure_code=entity.get("error_reason") or entity.get("error_code"),
         status="detected",
     )
     db.add(case)
@@ -104,10 +104,9 @@ def process_pending_cases(limit: int = 20, db: Session = Depends(get_db)):
     work through a big batch in manageable chunks, or raise the limit
     once you're on a paid tier.
     """
-    pending_statuses = ["detected", "diagnosed", "action_taken"]
     pending = (
         db.query(Case)
-        .filter(Case.status.in_(pending_statuses))
+        .filter(Case.status.in_(["detected", "diagnosed", "action_taken"]))
         .order_by(desc(Case.created_at), desc(Case.id))
         .limit(limit)
         .all()
@@ -138,12 +137,7 @@ def process_pending_cases(limit: int = 20, db: Session = Depends(get_db)):
         execute_action(db, case, decision["action"], decision["reason"])
         processed += 1
 
-    remaining_pending = (
-        db.query(Case)
-        .filter(Case.status.in_(pending_statuses))
-        .count()
-    )
-    return {"processed": processed, "remaining_pending": remaining_pending}
+    return {"processed": processed, "remaining_pending": len(pending) - processed if processed < limit else "unknown"}
 
 
 # ---------------------------------------------------------------------------
@@ -155,13 +149,13 @@ def list_cases(status: str | None = None, limit: int = 100, db: Session = Depend
     q = db.query(Case)
     if status:
         q = q.filter(Case.status == status)
-    cases = q.order_by(desc(Case.created_at), desc(Case.id)).limit(limit).all()
+    cases = q.order_by(desc(Case.created_at)).limit(limit).all()
     return [
         {
             "id": c.id, "event_type": c.event_type, "status": c.status,
             "amount": c.amount, "root_cause": c.root_cause,
-            "last_action": c.last_action, "retry_count": c.retry_count,
-            "recovered_amount": c.recovered_amount,
+            "last_action": c.last_action,
+            "retry_count": c.retry_count, "recovered_amount": c.recovered_amount,
         }
         for c in cases
     ]
@@ -179,8 +173,8 @@ def get_case(case_id: int, db: Session = Depends(get_db)):
         "status": case.status, "root_cause": case.root_cause,
         "diagnosis_confidence": case.diagnosis_confidence,
         "diagnosis_reasoning": case.diagnosis_reasoning,
-        "last_action": case.last_action,
         "retry_count": case.retry_count, "recovered_amount": case.recovered_amount,
+        "last_action": case.last_action,
     }
 
 
@@ -204,7 +198,7 @@ def get_metrics(db: Session = Depends(get_db)):
 
 
 # ---------------------------------------------------------------------------
-# 4. MINIMAL DASHBOARD (no build step, just fetch() against the API above)
+# 4. DASHBOARD (no build step, just fetch() against the API above)
 # ---------------------------------------------------------------------------
 
 @app.get("/dashboard", response_class=HTMLResponse)
@@ -216,33 +210,82 @@ DASHBOARD_HTML = """
 <!DOCTYPE html>
 <html>
 <head>
-<meta charset="utf-8">
-<title>Revenue Recovery Dashboard</title>
+<title>Revive AI -- Dashboard</title>
 <style>
-  body { font-family: -apple-system, sans-serif; max-width: 1000px; margin: 40px auto; padding: 0 20px; background:#fafafa; }
-  h1 { font-size: 22px; }
-  .metrics { display: flex; gap: 16px; flex-wrap: wrap; margin: 20px 0; }
-  .card { background: white; border: 1px solid #e5e5e5; border-radius: 8px; padding: 16px 20px; min-width: 160px; }
-  .card .label { font-size: 12px; color: #888; text-transform: uppercase; }
-  .card .value { font-size: 24px; font-weight: 600; margin-top: 4px; }
-  button { background: #111; color: white; border: none; padding: 8px 14px; border-radius: 6px; cursor: pointer; margin-right: 8px; }
-  button:disabled { background: #777; cursor: wait; }
-  #status { min-height: 20px; margin-top: 12px; color: #555; font-size: 13px; }
-  #status.error { color: #b91c1c; }
-  #status.ok { color: #166534; }
-  table { width: 100%; border-collapse: collapse; margin-top: 20px; background: white; }
-  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #eee; font-size: 13px; }
-  th { color: #888; font-weight: 500; }
-  .status { padding: 2px 8px; border-radius: 10px; font-size: 11px; }
+  :root {
+    --blue: #0b72e7;
+    --blue-dark: #072654;
+    --blue-soft: #eaf3ff;
+    --blue-line: #bfd7f7;
+    --white: #ffffff;
+    --text: #172033;
+    --muted: #667085;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 40px 20px;
+    color: var(--text);
+    background: linear-gradient(180deg, #eef6ff 0, #ffffff 260px);
+  }
+  h1 { margin: 0 0 20px; color: var(--blue-dark); font-size: 28px; }
+  .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin: 28px 0; }
+  .card {
+    background: var(--white);
+    border: 1px solid var(--blue-line);
+    border-left: 5px solid var(--blue);
+    border-radius: 8px;
+    padding: 18px 20px;
+    min-width: 160px;
+    box-shadow: 0 8px 22px rgba(11, 114, 231, .08);
+  }
+  .card .label { font-size: 12px; color: var(--muted); text-transform: uppercase; }
+  .card .value { color: var(--blue-dark); font-size: 28px; font-weight: 700; margin-top: 6px; }
+  button {
+    background: var(--blue);
+    color: white;
+    border: 1px solid var(--blue);
+    padding: 10px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    margin-right: 8px;
+    font-weight: 600;
+  }
+  button:hover { background: #075fc4; border-color: #075fc4; }
+  button:disabled { background: #88addb; border-color: #88addb; cursor: wait; }
+  #status { min-height: 20px; margin-top: 14px; color: var(--muted); font-size: 13px; }
+  #status.error { color: #b42318; }
+  #status.ok { color: var(--blue); }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 20px;
+    background: white;
+    border: 1px solid var(--blue-line);
+    box-shadow: 0 8px 22px rgba(11, 114, 231, .06);
+  }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #e6eef9; font-size: 13px; }
+  th { color: var(--blue-dark); font-weight: 700; background: var(--blue-soft); }
+  tbody tr:hover { background: #f6fbff; }
+  a { color: var(--blue); font-weight: 600; text-decoration: none; }
+  .status {
+    padding: 3px 9px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    background: var(--blue-soft);
+    color: var(--blue-dark);
+  }
   .recovered { background: #dcfce7; color: #166534; }
   .escalated { background: #fef3c7; color: #92400e; }
   .stopped { background: #f3f4f6; color: #6b7280; }
   .detected, .diagnosed, .action_taken { background: #dbeafe; color: #1e40af; }
-  .money-recovered { color: #166534; font-weight: 600; }
 </style>
 </head>
 <body>
-  <h1>AI Revenue Recovery -- Dashboard</h1>
+  <h1>Revive AI -- Revenue Recovery Dashboard</h1>
   <div>
     <button id="seed-btn" type="button">Seed 100 synthetic cases</button>
     <button id="process-btn" type="button">Run pipeline pass</button>
@@ -268,14 +311,6 @@ refreshButton.addEventListener('click', refresh);
 function setStatus(message = '', type = '') {
   statusEl.textContent = message;
   statusEl.className = type;
-}
-
-function formatLabel(value, fallback = '-') {
-  return value ? value.replace(/_/g, ' ') : fallback;
-}
-
-function formatMoney(value) {
-  return `₹${Number(value || 0).toLocaleString()}`;
 }
 
 async function seedData() {
@@ -325,10 +360,10 @@ async function refresh() {
     const cases = await (await fetch('/cases?limit=50')).json();
     document.querySelector('#cases-table tbody').innerHTML = cases.map(c => `
     <tr>
-      <td>${c.id}</td><td>${formatLabel(c.event_type)}</td><td>${formatLabel(c.root_cause, 'Not diagnosed yet')}</td>
-      <td>${formatMoney(c.amount)}</td><td><span class="status ${c.status}">${formatLabel(c.status)}</span></td>
-      <td>${formatLabel(c.last_action, 'No action yet')}</td>
-      <td class="${c.recovered_amount > 0 ? 'money-recovered' : ''}">${formatMoney(c.recovered_amount)}</td>
+      <td>${c.id}</td><td>${c.event_type}</td><td>${c.root_cause || '-'}</td>
+      <td>₹${c.amount}</td><td><span class="status ${c.status}">${c.status}</span></td>
+      <td>${c.last_action || '-'}</td>
+      <td>${c.recovered_amount > 0 ? '₹' + c.recovered_amount : '-'}</td>
       <td>${c.retry_count}</td>
       <td><a href="/cases/${c.id}/audit" target="_blank">view</a></td>
     </tr>
