@@ -1,158 +1,210 @@
-# Revive AI — Revenue Recovery Agent
+# Revive AI - Revenue Recovery Agent
 
-Detects at-risk revenue (failed payments, abandoned checkouts, failed
-subscriptions), diagnoses the root cause with an LLM (Groq), decides a bounded
-recovery action via a policy engine with explicit stopping rules, executes
-it, and logs a full audit trail. Ships with a synthetic data generator so
-you can build and demo the whole loop before Razorpay is even connected.
+Revive AI is a FastAPI-based revenue recovery prototype for Razorpay payment
+flows. It detects recoverable revenue events such as failed payments,
+abandoned checkouts, and failed subscription charges, diagnoses the likely
+root cause, chooses a bounded recovery action, executes that action, and keeps
+a full audit trail for every case.
 
-## How the pieces map to the judging criteria
+The project works end-to-end with synthetic data, so you can demo the recovery
+loop without connecting Razorpay. Groq and Razorpay credentials are optional.
 
-- **Problem taste** — picks one narrow, real loop (payment failure /
-  cart abandonment recovery) instead of trying to cover all seven
-  sub-directions in the track.
-- **Build quality** — runs today, on synthetic data, with no external
-  services required except your free Groq key. Structured into clean
-  modules: `models`, `policy`, `diagnosis`, `executor`, `metrics`.
-- **AI judgment** — the AI is used for exactly one thing it's actually
-  good at (classifying a messy failure reason into a category and
-  explaining why) and nowhere else. The bounds, retry caps, cooldowns, and
-  stopping rules are plain code (`policy.py`) — deliberately *not* left to
-  the model, because money-moving decisions need to be predictable.
-- **Failure recovery** — `policy.py`'s `escalate_after` logic is the
-  answer to "what broke and what did you do about it": once a case hits
-  its retry cap, it stops automatically and escalates instead of retrying
-  forever. See the demo walkthrough below.
+## What It Does
 
-## Project structure
+- Generates realistic synthetic failed-payment and checkout-abandonment cases.
+- Receives Razorpay test-mode webhooks for `payment.failed` and
+  `subscription.charged.failed` events.
+- Uses Groq for root-cause diagnosis when `GROQ_API_KEY` is configured.
+- Falls back to deterministic diagnosis from failure codes when Groq is not
+  configured.
+- Applies policy-based recovery rules with retry caps, cooldown checks, and
+  escalation paths.
+- Simulates recovery outcomes for local demos.
+- Exposes metrics, case details, and audit logs through API endpoints and a
+  lightweight dashboard.
 
-```
+## Tech Stack
+
+- Python
+- FastAPI
+- SQLAlchemy
+- SQLite
+- Jinja2
+- Groq API, optional
+- Razorpay SDK, optional
+
+## Project Structure
+
+```text
 app/
-  main.py            FastAPI app: all routes
-  database.py        SQLite/SQLAlchemy setup
-  models.py          Case + AuditLog tables
-  policy.py          Rules engine: root cause -> action, with retry caps & cooldowns
-  diagnosis.py        The one AI call: classifies root cause via Groq API
-  executor.py         Executes the chosen action, writes audit log rows
-  seed_data.py        Generates synthetic failed-payment/abandoned-checkout events
-  metrics.py          Batch metrics: at-risk amount, recovered amount, recovery rate
-  razorpay_client.py  Thin wrapper for real Razorpay test-mode payment links
+  main.py            FastAPI app, routes, Razorpay webhook, dashboard HTML
+  database.py        SQLite and SQLAlchemy setup
+  models.py          Case and AuditLog database models
+  seed_data.py       Synthetic event generator
+  diagnosis.py       Groq diagnosis plus deterministic fallback diagnosis
+  policy.py          Recovery policy engine with retry caps and cooldowns
+  executor.py        Action execution, simulated outcomes, audit logging
+  metrics.py         Batch-level recovery metrics
+  razorpay_client.py Razorpay payment-link helper for test mode
+
+.env.example         Example environment configuration
+requirements.txt     Python dependencies
+revenue_recovery.db  Local SQLite database, generated/used by the app
 ```
 
-## 1. Setup
+## Setup
+
+Create and activate a virtual environment:
 
 ```bash
-python3 -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
+python -m venv venv
+```
+
+On Windows PowerShell:
+
+```powershell
+.\venv\Scripts\Activate.ps1
+```
+
+On macOS/Linux:
+
+```bash
+source venv/bin/activate
+```
+
+Install dependencies:
+
+```bash
 pip install -r requirements.txt
+```
+
+Create your local environment file:
+
+```bash
 cp .env.example .env
 ```
 
-The app runs without external credentials by using deterministic fallback
-diagnosis from gateway failure codes. For the LLM diagnosis path, edit `.env`
-and add your **Groq API key**:
-```
-GROQ_API_KEY=gsk_...
-```
-Get one free, no card required, at https://console.groq.com
-(sign up, click "API Keys" in the sidebar, "Create API Key"). Free tier:
-30 requests/min, 14,400 requests/day on Llama 3.3 70B -- comfortably
-enough for a hackathon batch.
+On Windows PowerShell, use:
 
-Groq and Razorpay keys are optional for the first demo pass — everything runs
-on synthetic data without them. See step 4 below for when you're ready to add
-Razorpay test mode.
+```powershell
+Copy-Item .env.example .env
+```
 
-## 2. Run it
+## Environment Variables
+
+The app can run without external credentials. Add these values only when you
+want the optional integrations.
+
+```env
+GROQ_API_KEY=gsk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+RAZORPAY_KEY_ID=rzp_test_xxxxxxxxxxxxxx
+RAZORPAY_KEY_SECRET=xxxxxxxxxxxxxxxxxxxxx
+RAZORPAY_WEBHOOK_SECRET=xxxxxxxxxxxxxxxxxxxxx
+
+DATABASE_URL=sqlite:///./revenue_recovery.db
+```
+
+- `GROQ_API_KEY`: enables LLM-based diagnosis in `app/diagnosis.py`.
+- `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET`: enable Razorpay test-mode
+  payment-link creation.
+- `RAZORPAY_WEBHOOK_SECRET`: verifies incoming Razorpay webhook signatures.
+- `DATABASE_URL`: defaults to the local SQLite database.
+
+## Run The App
 
 ```bash
 uvicorn app.main:app --reload
 ```
 
-Open **http://localhost:8000/dashboard** — click "Seed 100 synthetic
-cases", then "Run pipeline pass" (click it 2-3 times to simulate multiple
-retry rounds), then watch the metrics update.
+Open the dashboard:
 
-Interactive API docs: **http://localhost:8000/docs**
+```text
+http://localhost:8000/dashboard
+```
 
-## 3. How the loop works
+Open the interactive API docs:
 
-1. `POST /seed?count=100` — generates fake failed payments / abandoned
-   checkouts / failed subscriptions with realistic failure codes.
-2. `POST /process` — for every pending case:
-   - calls Groq to classify the root cause (`diagnosis.py`)
-   - looks up the policy for that root cause (`policy.py`)
-   - checks retry count against the policy's cap
-   - if under the cap: executes the next action in sequence
-   - if at the cap: escalates or stops (never retries forever)
-   - writes an audit log row at every step
-3. `GET /metrics` — aggregate ₹ at risk, ₹ recovered, recovery rate,
-   breakdown by root cause.
-4. `GET /cases/{id}/audit` — full explainable trail for one case, in order.
+```text
+http://localhost:8000/docs
+```
 
-Run `/process` repeatedly (or wire it to a loop/cron) to simulate the
-retry-with-cooldown cycle across a batch over "time."
+## Demo Flow
 
-## 4. Setting up Razorpay test mode (do this once you're ready for real data)
+1. Start the server with `uvicorn app.main:app --reload`.
+2. Open `http://localhost:8000/dashboard`.
+3. Click `Seed 100 synthetic cases`.
+4. Click `Run pipeline pass`.
+5. Run the pipeline multiple times to simulate retry rounds.
+6. Watch total at-risk amount, recovered amount, recovery rate, pending cases,
+   and escalations update.
+7. Open any case audit link to inspect the full decision trail.
 
-1. Go to https://dashboard.razorpay.com/signup and create an account.
-2. In the dashboard, make sure you're in **Test Mode** (toggle top-left —
-   it should say "Test Mode", not "Live Mode"). You never need to submit
-   KYC or go live for this project.
-3. Go to **Settings -> API Keys -> Generate Test Key**. Copy the
-   **Key ID** and **Key Secret** into your `.env`:
+## API Endpoints
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `POST` | `/seed?count=100` | Generate synthetic recovery cases |
+| `POST` | `/process?limit=20` | Diagnose, decide, and act on pending cases |
+| `GET` | `/cases?limit=100` | List recent cases |
+| `GET` | `/cases?status=detected` | List cases filtered by status |
+| `GET` | `/cases/{case_id}` | Get one case |
+| `GET` | `/cases/{case_id}/audit` | Get the audit trail for one case |
+| `GET` | `/metrics` | Get aggregate recovery metrics |
+| `POST` | `/webhook/razorpay` | Receive Razorpay test-mode failure events |
+| `GET` | `/dashboard` | Open the built-in dashboard |
+
+## Pipeline Behavior
+
+Each `/process` pass works through pending cases in this order:
+
+1. Diagnose the root cause with Groq or deterministic fallback logic.
+2. Store the root cause, confidence, and reasoning on the case.
+3. Look up the policy rule for that root cause.
+4. Check retry caps and cooldown rules.
+5. Execute the chosen action.
+6. Mark the case as recovered, action taken, escalated, or stopped.
+7. Write audit log entries for explainability.
+
+The default process limit is `20` cases per pass. The app sleeps briefly
+between diagnosis calls to stay friendly to free-tier LLM rate limits.
+
+## Razorpay Test Mode
+
+Razorpay is optional for the local demo. To connect test-mode events:
+
+1. Create a Razorpay account.
+2. Switch the dashboard to Test Mode.
+3. Generate test API keys from Razorpay settings.
+4. Add `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET` to `.env`.
+5. Expose the local server with ngrok:
+
+   ```bash
+   ngrok http 8000
    ```
-   RAZORPAY_KEY_ID=rzp_test_...
-   RAZORPAY_KEY_SECRET=...
+
+6. Add a Razorpay webhook URL pointing to:
+
+   ```text
+   https://your-ngrok-url/webhook/razorpay
    ```
-4. To generate **real** failed-payment events instead of only synthetic
-   ones: create a test Order via the Razorpay API or dashboard, then pay it
-   using Razorpay's documented test card/UPI numbers that are designed to
-   simulate specific failures (insufficient funds, bank timeout, etc.) —
-   see https://razorpay.com/docs/payments/payments/test-card-upi-details/
-5. To receive those events automatically instead of polling:
-   - Go to **Settings -> Webhooks -> Add New Webhook**.
-   - For local dev, expose your machine with `ngrok http 8000` and use
-     the ngrok URL + `/webhook/razorpay` as the webhook URL.
-   - Enable at least the `payment.failed` event.
-   - Copy the **Webhook Secret** shown into your `.env` as
-     `RAZORPAY_WEBHOOK_SECRET` (this is what verifies incoming webhooks
-     are really from Razorpay, not spoofed).
-6. To actually send recovery payment links instead of simulating them:
-   nothing else to do — `executor.py` already calls
-   `razorpay_client.create_payment_link()` automatically once
-   `RAZORPAY_KEY_ID`/`SECRET` are set (checked via `is_razorpay_configured()`).
 
-You do **not** need Razorpay set up to build, test, or demo the diagnosis,
-policy, stopping-rules, and metrics parts of this project — that's the
-whole point of the synthetic data generator.
+7. Enable at least the `payment.failed` event.
+8. Add the Razorpay webhook secret to `RAZORPAY_WEBHOOK_SECRET`.
 
-## 5. Demo walkthrough
+## Known Limitations
 
-Steps to reproduce the full pipeline on a clean batch, from an empty database:
+- Recovery success is simulated in `executor.py`; production usage should
+  listen for real successful payment webhooks.
+- Reminder and nudge actions are logged but not sent through SMS, email, or
+  WhatsApp providers.
+- The root-cause taxonomy is intentionally small so policy decisions stay
+  explainable.
+- The dashboard is embedded directly in `app/main.py` for a simple hackathon
+  demo; it is not a separate frontend app.
 
-1. Seed a batch: `POST /seed?count=100` (or click **Seed 100 synthetic cases** on the dashboard).
-2. Run the pipeline: `POST /process` (or click **Run pipeline pass**). This
-   processes cases in batches of 20 with a short delay between diagnosis
-   calls, so a full batch of 100 needs several passes to fully clear.
-3. Inspect an individual case's reasoning and outcome via
-   `GET /cases/{id}/audit` — this shows the full chain: detected ->
-   diagnosed (root cause, confidence, reasoning) -> decided (which policy
-   rule fired and why) -> action executed -> outcome.
-4. Look specifically for a case that hit its retry cap and escalated
-   instead of retrying indefinitely — this demonstrates the stopping-rule
-   behavior described above.
-5. Check `GET /metrics` for the batch-level numbers: total at risk, total
-   recovered, recovery rate, and a breakdown by root cause.
+## Notes
 
-## Known limitations
-
-- Retry/nudge *success* is simulated with a weighted random roll
-  (`executor.py::_simulate_retry_outcome`), not a real payment webhook,
-  since a hackathon can't wait days for real customers to retry. Swap this
-  for real `payment.captured` webhook handling for production use.
-- Notifications (reminders, nudges) are logged, not actually sent. Wiring
-  real SMS/email/WhatsApp is a couple hours of work with any provider's
-  API but wasn't the point of this build.
-- The root-cause taxonomy is fixed and small (7 categories) on purpose —
-  it's what keeps the policy engine's decisions bounded and explainable.
+This project is designed around a narrow, auditable loop: detect revenue at
+risk, diagnose why it failed, choose a bounded action, and stop or escalate
+instead of retrying forever.
