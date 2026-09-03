@@ -3,7 +3,6 @@ Run with:  uvicorn app.main:app --reload
 Then open: http://localhost:8000/docs   (interactive API playground)
            http://localhost:8000/dashboard
 
-Suggested first run (no Razorpay needed):
   1. POST /seed?count=100          -> generates fake events
   2. POST /process                 -> runs detect->diagnose->decide->act on all pending cases
   3. GET  /metrics                 -> see recovery numbers
