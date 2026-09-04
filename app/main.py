@@ -16,7 +16,7 @@ import time
 from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
+from sqlalchemy import desc, case as sql_case
 
 from app.database import Base, engine, get_db
 from app.models import Case, AuditLog
@@ -107,7 +107,15 @@ def process_pending_cases(limit: int = 20, db: Session = Depends(get_db)):
     pending = (
         db.query(Case)
         .filter(Case.status.in_(["detected", "diagnosed", "action_taken"]))
-        .order_by(desc(Case.created_at), desc(Case.id))
+        .order_by(
+            sql_case(
+                (Case.status == "detected", 0),
+                (Case.status == "diagnosed", 1),
+                else_=2,
+            ),
+            desc(Case.created_at),
+            desc(Case.id),
+        )
         .limit(limit)
         .all()
     )
@@ -356,6 +364,7 @@ async function refresh() {
     <div class="card"><div class="label">Recovery Rate</div><div class="value">${m.recovery_rate_by_amount_pct}%</div></div>
     <div class="card"><div class="label">Escalated</div><div class="value">${m.escalated_count}</div></div>
     <div class="card"><div class="label">Pending</div><div class="value">${m.pending_count}</div></div>
+    <div class="card"><div class="label">Action Taken</div><div class="value">${m.action_taken_count}</div></div>
     `;
     const cases = await (await fetch('/cases?limit=50')).json();
     document.querySelector('#cases-table tbody').innerHTML = cases.map(c => `

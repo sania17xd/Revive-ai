@@ -16,8 +16,9 @@ def compute_metrics(db) -> dict:
     escalated_count = db.query(func.count(Case.id)).filter(Case.status == "escalated").scalar() or 0
     stopped_count = db.query(func.count(Case.id)).filter(Case.status == "stopped").scalar() or 0
     pending_count = db.query(func.count(Case.id)).filter(
-        Case.status.in_(["detected", "diagnosed", "action_taken"])
+        Case.status.in_(["detected", "diagnosed"])
     ).scalar() or 0
+    action_taken_count = db.query(func.count(Case.id)).filter(Case.status == "action_taken").scalar() or 0
 
     by_root_cause = (
         db.query(Case.root_cause, func.count(Case.id), func.sum(Case.recovered_amount))
@@ -38,6 +39,7 @@ def compute_metrics(db) -> dict:
         "escalated_count": escalated_count,
         "stopped_count": stopped_count,
         "pending_count": pending_count,
+        "action_taken_count": action_taken_count,
         "breakdown_by_root_cause": [
             {"root_cause": rc or "not_yet_diagnosed", "cases": c, "amount_recovered": round(amt or 0.0, 2)}
             for rc, c, amt in by_root_cause
