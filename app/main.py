@@ -1,6 +1,6 @@
 """
 Run with:  uvicorn app.main:app --reload
-Then open: http://localhost:8000/docs   (interactive API playground)
+Then open: http://localhost:8000/docs 
            http://localhost:8000/dashboard
 
   1. POST /seed?count=100          -> generates fake events
@@ -205,7 +205,7 @@ def get_metrics(db: Session = Depends(get_db)):
 
 
 # ---------------------------------------------------------------------------
-# 4. DASHBOARD (no build step, just fetch() against the API above)
+# 4. DASHBOARD 
 # ---------------------------------------------------------------------------
 
 @app.get("/dashboard", response_class=HTMLResponse)
